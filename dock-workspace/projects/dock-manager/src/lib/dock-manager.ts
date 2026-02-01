@@ -1,15 +1,11 @@
-import { Component } from '@angular/core';
+import { ChangeDetectionStrategy, Component } from '@angular/core';
 
 @Component({
   selector: 'lib-dock-manager',
-  imports: [],
+  standalone: true,
   template: `
-    <p>
-      dock-manager works!
-    </p>
+    <p>dock-manager works!</p>
   `,
-  styles: ``,
+  changeDetection: ChangeDetectionStrategy.OnPush
 })
-export class DockManager {
-
-}
+export class DockManager {}
