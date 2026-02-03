@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component } from '@angular/core';
-import { DockLayout, DockRootComponent, DockStore } from 'dock-manager';
+import { DockLayout, DockRendererComponent, DockStore } from 'dock-manager';
 
 const initialLayout: DockLayout = {
   root: {
@@ -48,7 +48,7 @@ const initialLayout: DockLayout = {
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [DockRootComponent],
+  imports: [DockRendererComponent],
   templateUrl: './app.html',
   styleUrl: './app.scss',
   changeDetection: ChangeDetectionStrategy.OnPush
