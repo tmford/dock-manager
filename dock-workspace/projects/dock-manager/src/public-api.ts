@@ -9,6 +9,7 @@ export * from './lib/model/split-node';
 export * from './lib/model/tab-group-node';
 
 export * from './lib/state/dock-store';
+export * from './lib/state/dock-commands';
 
 export * from './lib/components/dock-pane-host.component';
 export * from './lib/components/dock-renderer.component';

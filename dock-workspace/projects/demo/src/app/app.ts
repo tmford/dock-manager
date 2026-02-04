@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
 import { DockLayout, DockRendererComponent, DockStore } from 'dock-manager';
 
 const initialLayout: DockLayout = {
@@ -54,5 +54,9 @@ const initialLayout: DockLayout = {
   changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class App {
-  readonly dockStore = new DockStore(initialLayout);
+  readonly dockStore = inject(DockStore);
+
+  constructor() {
+    this.dockStore.setLayout(initialLayout);
+  }
 }

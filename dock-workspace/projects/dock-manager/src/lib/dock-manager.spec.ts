@@ -1,3 +1,4 @@
+import { provideZonelessChangeDetection } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 
 import { DockManager } from './dock-manager';
@@ -8,7 +9,8 @@ describe('DockManager', () => {
 
   beforeEach(async () => {
     await TestBed.configureTestingModule({
-      imports: [DockManager]
+      imports: [DockManager],
+      providers: [provideZonelessChangeDetection()]
     })
     .compileComponents();
 

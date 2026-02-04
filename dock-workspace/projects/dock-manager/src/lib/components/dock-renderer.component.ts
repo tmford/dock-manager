@@ -1,8 +1,9 @@
 import { NgTemplateOutlet } from '@angular/common';
-import { ChangeDetectionStrategy, Component, Input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, Input, inject } from '@angular/core';
 import { LayoutNode } from '../model/layout-node';
 import { SplitNode } from '../model/split-node';
 import { TabGroupNode } from '../model/tab-group-node';
+import { DockCommands } from '../state/dock-commands';
 import { DockStore } from '../state/dock-store';
 import { DockPaneHostComponent } from './dock-pane-host.component';
 
@@ -148,6 +149,7 @@ import { DockPaneHostComponent } from './dock-pane-host.component';
 export class DockRendererComponent {
   @Input({ required: true }) node!: LayoutNode;
   @Input({ required: true }) store!: DockStore;
+  private readonly commands = inject(DockCommands);
 
   splitNode(node: LayoutNode): SplitNode {
     if (node.type !== 'split') {
@@ -175,6 +177,6 @@ export class DockRendererComponent {
   }
 
   activate(groupId: string, paneId: string): void {
-    this.store.setActivePane(groupId, paneId);
+    this.commands.setActivePane(groupId, paneId);
   }
 }
