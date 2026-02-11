@@ -1,3 +1,4 @@
+import { DragDropModule } from '@angular/cdk/drag-drop';
 import { ChangeDetectionStrategy, Component, Input } from '@angular/core';
 import { DockStore } from '../state/dock-store';
 import { DockRendererComponent } from './dock-renderer.component';
@@ -5,9 +6,9 @@ import { DockRendererComponent } from './dock-renderer.component';
 @Component({
   selector: 'dock-root',
   standalone: true,
-  imports: [DockRendererComponent],
+  imports: [DockRendererComponent, DragDropModule],
   template: `
-    <section class="dock-root">
+    <section class="dock-root" cdkDropListGroup>
       @if (store) {
         <dock-renderer [node]="store.layout().root" [store]="store"></dock-renderer>
       } 

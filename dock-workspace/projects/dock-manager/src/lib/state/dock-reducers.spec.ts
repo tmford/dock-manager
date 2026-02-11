@@ -1,5 +1,13 @@
 import { DockLayout } from '../model/dock-layout';
-import { reduceSetActivePane } from './dock-reducers';
+import { LayoutNode } from '../model/layout-node';
+import { SplitNode } from '../model/split-node';
+import { TabGroupNode } from '../model/tab-group-node';
+import {
+  reduceClosePane,
+  reduceMovePaneBetweenGroups,
+  reduceReorderPaneWithinGroup,
+  reduceSetActivePane
+} from './dock-reducers';
 
 describe('dock reducers', () => {
   const baseLayout: DockLayout = {
@@ -30,31 +38,682 @@ describe('dock reducers', () => {
     }
   };
 
+  // ---------------------------------------------------------------------------
+  // helpers (Option A: fail() + throw to make TS narrow unions)
+  // ---------------------------------------------------------------------------
+  function asSplit(node: LayoutNode): SplitNode {
+    if (node.type !== 'split') {
+      fail(`expected split node, got ${node.type}`);
+      throw new Error('unreachable');
+    }
+    return node;
+  }
+
+  function asTabGroup(node: LayoutNode): TabGroupNode {
+    if (node.type !== 'tab-group') {
+      fail(`expected tab-group node, got ${node.type}`);
+      throw new Error('unreachable');
+    }
+    return node;
+  }
+
+  function expectSizesSumTo100(sizes: number[], epsilon = 0.01) {
+    const sum = sizes.reduce((a, b) => a + b, 0);
+    expect(Math.abs(sum - 100)).toBeLessThan(epsilon);
+  }
+
+  // ---------------------------------------------------------------------------
+  // set active pane
+  // ---------------------------------------------------------------------------
   it('sets active pane in existing group', () => {
     const next = reduceSetActivePane(baseLayout, 'left', 'b');
 
     expect(next).not.toBe(baseLayout);
-    if (next.root.type === 'split') {
-      const left = next.root.children[0];
-      if (left.type === 'tab-group') {
-        expect(left.activePaneId).toBe('b');
-      } else {
-        fail('expected tab-group node');
-      }
-    } else {
-      fail('expected split root');
-    }
+
+    const root = asSplit(next.root);
+    const left = asTabGroup(root.children[0]);
+    expect(left.activePaneId).toBe('b');
   });
 
   it('no-ops when groupId is not found', () => {
     const next = reduceSetActivePane(baseLayout, 'missing', 'b');
-
     expect(next).toBe(baseLayout);
   });
 
   it('no-ops when paneId is not in that group', () => {
     const next = reduceSetActivePane(baseLayout, 'left', 'c');
-
     expect(next).toBe(baseLayout);
+  });
+
+  // ---------------------------------------------------------------------------
+  // close pane
+  // ---------------------------------------------------------------------------
+  it('removes paneId from group', () => {
+    const next = reduceClosePane(baseLayout, 'left', 'b');
+
+    expect(next).not.toBe(baseLayout);
+
+    const root = asSplit(next.root);
+    const left = asTabGroup(root.children[0]);
+    expect(left.paneIds).toEqual(['a']);
+    expect(left.activePaneId).toBe('a');
+  });
+
+  it('no-ops when closing a missing group', () => {
+    const next = reduceClosePane(baseLayout, 'missing', 'b');
+    expect(next).toBe(baseLayout);
+  });
+
+  it('no-ops when closing a pane not in the group', () => {
+    const next = reduceClosePane(baseLayout, 'left', 'c');
+    expect(next).toBe(baseLayout);
+  });
+
+  it('keeps active pane when closing an inactive pane', () => {
+    const layout: DockLayout = {
+      root: {
+        type: 'tab-group',
+        id: 'group',
+        paneIds: ['a', 'b', 'c'],
+        activePaneId: 'b'
+      },
+      panesById: {
+        a: { id: 'a', title: 'A', componentKey: 'a' },
+        b: { id: 'b', title: 'B', componentKey: 'b' },
+        c: { id: 'c', title: 'C', componentKey: 'c' }
+      }
+    };
+
+    const next = reduceClosePane(layout, 'group', 'a');
+
+    expect(next).not.toBe(layout);
+
+    const root = asTabGroup(next.root);
+    expect(root.activePaneId).toBe('b');
+    expect(root.paneIds).toEqual(['b', 'c']);
+  });
+
+  it('selects left neighbor when closing the active pane', () => {
+    const layout: DockLayout = {
+      root: {
+        type: 'tab-group',
+        id: 'group',
+        paneIds: ['a', 'b', 'c'],
+        activePaneId: 'b'
+      },
+      panesById: {
+        a: { id: 'a', title: 'A', componentKey: 'a' },
+        b: { id: 'b', title: 'B', componentKey: 'b' },
+        c: { id: 'c', title: 'C', componentKey: 'c' }
+      }
+    };
+
+    const next = reduceClosePane(layout, 'group', 'b');
+
+    const root = asTabGroup(next.root);
+    expect(root.activePaneId).toBe('a');
+    expect(root.paneIds).toEqual(['a', 'c']);
+  });
+
+  it('selects next pane when closing the first active pane', () => {
+    const layout: DockLayout = {
+      root: {
+        type: 'tab-group',
+        id: 'group',
+        paneIds: ['a', 'b'],
+        activePaneId: 'a'
+      },
+      panesById: {
+        a: { id: 'a', title: 'A', componentKey: 'a' },
+        b: { id: 'b', title: 'B', componentKey: 'b' }
+      }
+    };
+
+    const next = reduceClosePane(layout, 'group', 'a');
+
+    const root = asTabGroup(next.root);
+    expect(root.activePaneId).toBe('b');
+    expect(root.paneIds).toEqual(['b']);
+  });
+
+  it('clears active pane when closing the last tab', () => {
+    const layout: DockLayout = {
+      root: {
+        type: 'tab-group',
+        id: 'group',
+        paneIds: ['a'],
+        activePaneId: 'a'
+      },
+      panesById: {
+        a: { id: 'a', title: 'A', componentKey: 'a' }
+      }
+    };
+
+    const next = reduceClosePane(layout, 'group', 'a');
+
+    const root = asTabGroup(next.root);
+    expect(root.paneIds).toEqual([]);
+    expect(root.activePaneId).toBe('');
+  });
+
+  it('closes pane in a nested tab group', () => {
+    const layout: DockLayout = {
+      root: {
+        type: 'split',
+        id: 'root',
+        direction: 'horizontal',
+        sizes: [40, 60],
+        children: [
+          {
+            type: 'tab-group',
+            id: 'left',
+            paneIds: ['a'],
+            activePaneId: 'a'
+          },
+          {
+            type: 'split',
+            id: 'right-split',
+            direction: 'vertical',
+            sizes: [70, 30],
+            children: [
+              {
+                type: 'tab-group',
+                id: 'right-top',
+                paneIds: ['b', 'c'],
+                activePaneId: 'c'
+              },
+              {
+                type: 'tab-group',
+                id: 'right-bottom',
+                paneIds: ['d'],
+                activePaneId: 'd'
+              }
+            ]
+          }
+        ]
+      },
+      panesById: {
+        a: { id: 'a', title: 'A', componentKey: 'a' },
+        b: { id: 'b', title: 'B', componentKey: 'b' },
+        c: { id: 'c', title: 'C', componentKey: 'c' },
+        d: { id: 'd', title: 'D', componentKey: 'd' }
+      }
+    };
+
+    const next = reduceClosePane(layout, 'right-top', 'c');
+
+    expect(next).not.toBe(layout);
+
+    const root = asSplit(next.root);
+    const right = asSplit(root.children[1]);
+    const rightTop = asTabGroup(right.children[0]);
+
+    expect(rightTop.paneIds).toEqual(['b']);
+    expect(rightTop.activePaneId).toBe('b');
+  });
+
+  // ---------------------------------------------------------------------------
+  // reorder within group
+  // ---------------------------------------------------------------------------
+  it('reorders panes within a group', () => {
+    const layout: DockLayout = {
+      root: {
+        type: 'tab-group',
+        id: 'group',
+        paneIds: ['a', 'b', 'c'],
+        activePaneId: 'b'
+      },
+      panesById: {
+        a: { id: 'a', title: 'A', componentKey: 'a' },
+        b: { id: 'b', title: 'B', componentKey: 'b' },
+        c: { id: 'c', title: 'C', componentKey: 'c' }
+      }
+    };
+
+    const next = reduceReorderPaneWithinGroup(layout, 'group', 0, 2);
+
+    expect(next).not.toBe(layout);
+
+    const root = asTabGroup(next.root);
+    expect(root.paneIds).toEqual(['b', 'c', 'a']);
+    expect(root.activePaneId).toBe('b');
+  });
+
+  it('no-ops when reorder indices are the same', () => {
+    const layout: DockLayout = {
+      root: {
+        type: 'tab-group',
+        id: 'group',
+        paneIds: ['a', 'b'],
+        activePaneId: 'a'
+      },
+      panesById: {
+        a: { id: 'a', title: 'A', componentKey: 'a' },
+        b: { id: 'b', title: 'B', componentKey: 'b' }
+      }
+    };
+
+    const next = reduceReorderPaneWithinGroup(layout, 'group', 1, 1);
+    expect(next).toBe(layout);
+  });
+
+  it('keeps active pane unchanged on reorder', () => {
+    const layout: DockLayout = {
+      root: {
+        type: 'tab-group',
+        id: 'group',
+        paneIds: ['a', 'b', 'c'],
+        activePaneId: 'c'
+      },
+      panesById: {
+        a: { id: 'a', title: 'A', componentKey: 'a' },
+        b: { id: 'b', title: 'B', componentKey: 'b' },
+        c: { id: 'c', title: 'C', componentKey: 'c' }
+      }
+    };
+
+    const next = reduceReorderPaneWithinGroup(layout, 'group', 2, 0);
+
+    const root = asTabGroup(next.root);
+    expect(root.paneIds).toEqual(['c', 'a', 'b']);
+    expect(root.activePaneId).toBe('c');
+  });
+
+  it('reorders in a nested tab group', () => {
+    const layout: DockLayout = {
+      root: {
+        type: 'split',
+        id: 'root',
+        direction: 'horizontal',
+        sizes: [50, 50],
+        children: [
+          {
+            type: 'tab-group',
+            id: 'left',
+            paneIds: ['a'],
+            activePaneId: 'a'
+          },
+          {
+            type: 'split',
+            id: 'right',
+            direction: 'vertical',
+            sizes: [60, 40],
+            children: [
+              {
+                type: 'tab-group',
+                id: 'right-top',
+                paneIds: ['b', 'c', 'd'],
+                activePaneId: 'c'
+              },
+              {
+                type: 'tab-group',
+                id: 'right-bottom',
+                paneIds: ['e'],
+                activePaneId: 'e'
+              }
+            ]
+          }
+        ]
+      },
+      panesById: {
+        a: { id: 'a', title: 'A', componentKey: 'a' },
+        b: { id: 'b', title: 'B', componentKey: 'b' },
+        c: { id: 'c', title: 'C', componentKey: 'c' },
+        d: { id: 'd', title: 'D', componentKey: 'd' },
+        e: { id: 'e', title: 'E', componentKey: 'e' }
+      }
+    };
+
+    const next = reduceReorderPaneWithinGroup(layout, 'right-top', 2, 0);
+
+    expect(next).not.toBe(layout);
+
+    const root = asSplit(next.root);
+    const right = asSplit(root.children[1]);
+    const rightTop = asTabGroup(right.children[0]);
+
+    expect(rightTop.paneIds).toEqual(['d', 'b', 'c']);
+    expect(rightTop.activePaneId).toBe('c');
+  });
+
+  // ---------------------------------------------------------------------------
+  // move between groups
+  // ---------------------------------------------------------------------------
+  it('moves pane between groups and activates destination', () => {
+    const layout: DockLayout = {
+      root: {
+        type: 'split',
+        id: 'root',
+        direction: 'horizontal',
+        sizes: [50, 50],
+        children: [
+          {
+            type: 'tab-group',
+            id: 'left',
+            paneIds: ['a', 'b'],
+            activePaneId: 'a'
+          },
+          {
+            type: 'tab-group',
+            id: 'right',
+            paneIds: ['c'],
+            activePaneId: 'c'
+          }
+        ]
+      },
+      panesById: {
+        a: { id: 'a', title: 'A', componentKey: 'a' },
+        b: { id: 'b', title: 'B', componentKey: 'b' },
+        c: { id: 'c', title: 'C', componentKey: 'c' }
+      }
+    };
+
+    const next = reduceMovePaneBetweenGroups(layout, 'b', 'left', 'right', 1);
+
+    expect(next).not.toBe(layout);
+
+    const root = asSplit(next.root);
+    const left = asTabGroup(root.children[0]);
+    const right = asTabGroup(root.children[1]);
+
+    expect(left.paneIds).toEqual(['a']);
+    expect(left.activePaneId).toBe('a');
+    expect(right.paneIds).toEqual(['c', 'b']);
+    expect(right.activePaneId).toBe('b');
+  });
+
+  it('uses left neighbor when source active pane is removed', () => {
+    const layout: DockLayout = {
+      root: {
+        type: 'split',
+        id: 'root',
+        direction: 'horizontal',
+        sizes: [50, 50],
+        children: [
+          {
+            type: 'tab-group',
+            id: 'left',
+            paneIds: ['a', 'b', 'c'],
+            activePaneId: 'b'
+          },
+          {
+            type: 'tab-group',
+            id: 'right',
+            paneIds: ['d'],
+            activePaneId: 'd'
+          }
+        ]
+      },
+      panesById: {
+        a: { id: 'a', title: 'A', componentKey: 'a' },
+        b: { id: 'b', title: 'B', componentKey: 'b' },
+        c: { id: 'c', title: 'C', componentKey: 'c' },
+        d: { id: 'd', title: 'D', componentKey: 'd' }
+      }
+    };
+
+    const next = reduceMovePaneBetweenGroups(layout, 'b', 'left', 'right', 0);
+
+    const root = asSplit(next.root);
+    const left = asTabGroup(root.children[0]);
+    const right = asTabGroup(root.children[1]);
+
+    expect(left.paneIds).toEqual(['a', 'c']);
+    expect(left.activePaneId).toBe('a');
+    expect(right.paneIds).toEqual(['b', 'd']);
+    expect(right.activePaneId).toBe('b');
+  });
+
+  it('uses right neighbor when source active pane is first', () => {
+    const layout: DockLayout = {
+      root: {
+        type: 'split',
+        id: 'root',
+        direction: 'horizontal',
+        sizes: [50, 50],
+        children: [
+          {
+            type: 'tab-group',
+            id: 'left',
+            paneIds: ['a', 'b'],
+            activePaneId: 'a'
+          },
+          {
+            type: 'tab-group',
+            id: 'right',
+            paneIds: ['c'],
+            activePaneId: 'c'
+          }
+        ]
+      },
+      panesById: {
+        a: { id: 'a', title: 'A', componentKey: 'a' },
+        b: { id: 'b', title: 'B', componentKey: 'b' },
+        c: { id: 'c', title: 'C', componentKey: 'c' }
+      }
+    };
+
+    const next = reduceMovePaneBetweenGroups(layout, 'a', 'left', 'right', 0);
+
+    const root = asSplit(next.root);
+    const left = asTabGroup(root.children[0]);
+    const right = asTabGroup(root.children[1]);
+
+    expect(left.paneIds).toEqual(['b']);
+    expect(left.activePaneId).toBe('b');
+    expect(right.paneIds).toEqual(['a', 'c']);
+    expect(right.activePaneId).toBe('a');
+  });
+
+  it('normalizes by removing empty groups and melting splits', () => {
+    const layout: DockLayout = {
+      root: {
+        type: 'split',
+        id: 'root',
+        direction: 'horizontal',
+        sizes: [50, 50],
+        children: [
+          {
+            type: 'tab-group',
+            id: 'left',
+            paneIds: ['a'],
+            activePaneId: 'a'
+          },
+          {
+            type: 'tab-group',
+            id: 'right',
+            paneIds: ['b'],
+            activePaneId: 'b'
+          }
+        ]
+      },
+      panesById: {
+        a: { id: 'a', title: 'A', componentKey: 'a' },
+        b: { id: 'b', title: 'B', componentKey: 'b' }
+      }
+    };
+
+    const next = reduceMovePaneBetweenGroups(layout, 'a', 'left', 'right', 1);
+
+    expect(next).not.toBe(layout);
+
+    const root = asTabGroup(next.root);
+    expect(root.id).toBe('right');
+    expect(root.paneIds).toEqual(['b', 'a']);
+    expect(root.activePaneId).toBe('a');
+  });
+
+  it('moves across nested splits and normalizes', () => {
+    const layout: DockLayout = {
+      root: {
+        type: 'split',
+        id: 'root',
+        direction: 'horizontal',
+        sizes: [50, 50],
+        children: [
+          {
+            type: 'split',
+            id: 'left-split',
+            direction: 'vertical',
+            sizes: [60, 40],
+            children: [
+              {
+                type: 'tab-group',
+                id: 'left-top',
+                paneIds: ['a'],
+                activePaneId: 'a'
+              },
+              {
+                type: 'tab-group',
+                id: 'left-bottom',
+                paneIds: ['b'],
+                activePaneId: 'b'
+              }
+            ]
+          },
+          {
+            type: 'tab-group',
+            id: 'right',
+            paneIds: ['c'],
+            activePaneId: 'c'
+          }
+        ]
+      },
+      panesById: {
+        a: { id: 'a', title: 'A', componentKey: 'a' },
+        b: { id: 'b', title: 'B', componentKey: 'b' },
+        c: { id: 'c', title: 'C', componentKey: 'c' }
+      }
+    };
+
+    const next = reduceMovePaneBetweenGroups(layout, 'a', 'left-top', 'right', 0);
+
+    const root = asSplit(next.root);
+    const left = asTabGroup(root.children[0]);
+    const right = asTabGroup(root.children[1]);
+
+    expect(left.id).toBe('left-bottom');
+    expect(left.paneIds).toEqual(['b']);
+    expect(right.paneIds).toEqual(['a', 'c']);
+    expect(right.activePaneId).toBe('a');
+  });
+
+  // ---------------------------------------------------------------------------
+  // NEW: normalization + sizing + sentinel guarantees
+  // ---------------------------------------------------------------------------
+  it('prunes empty non-root tab groups and melts resulting split', () => {
+    const layout: DockLayout = {
+      root: {
+        type: 'split',
+        id: 'root',
+        direction: 'horizontal',
+        sizes: [50, 50],
+        children: [
+          {
+            type: 'tab-group',
+            id: 'left',
+            paneIds: ['a'],
+            activePaneId: 'a'
+          },
+          {
+            type: 'tab-group',
+            id: 'right',
+            paneIds: ['b'],
+            activePaneId: 'b'
+          }
+        ]
+      },
+      panesById: {
+        a: { id: 'a', title: 'A', componentKey: 'a' },
+        b: { id: 'b', title: 'B', componentKey: 'b' }
+      }
+    };
+
+    const next = reduceClosePane(layout, 'left', 'a');
+
+    expect(next).not.toBe(layout);
+
+    const root = asTabGroup(next.root);
+    expect(root.id).toBe('right');
+    expect(root.paneIds).toEqual(['b']);
+    expect(root.activePaneId).toBe('b');
+  });
+
+  it('rebalance sizes when a split child is pruned (shrinking split)', () => {
+    const layout: DockLayout = {
+      root: {
+        type: 'split',
+        id: 'root',
+        direction: 'horizontal',
+        sizes: [33, 33, 34],
+        children: [
+          { type: 'tab-group', id: 'g1', paneIds: ['a'], activePaneId: 'a' },
+          { type: 'tab-group', id: 'g2', paneIds: ['b'], activePaneId: 'b' },
+          { type: 'tab-group', id: 'g3', paneIds: ['c'], activePaneId: 'c' }
+        ]
+      },
+      panesById: {
+        a: { id: 'a', title: 'A', componentKey: 'a' },
+        b: { id: 'b', title: 'B', componentKey: 'b' },
+        c: { id: 'c', title: 'C', componentKey: 'c' }
+      }
+    };
+
+    const next = reduceClosePane(layout, 'g2', 'b');
+
+    const root = asSplit(next.root);
+    expect(root.children.length).toBe(2);
+    expect(root.sizes.length).toBe(2);
+    expectSizesSumTo100(root.sizes);
+    expect(root.sizes[0]).toBeCloseTo(50, 2);
+    expect(root.sizes[1]).toBeCloseTo(50, 2);
+
+    const ids = root.children.map((c) => asTabGroup(c).id);
+    expect(ids).toEqual(['g1', 'g3']);
+  });
+
+  it('root never disappears; closing the last root tab leaves an empty root tab-group', () => {
+    const layout: DockLayout = {
+      root: {
+        type: 'tab-group',
+        id: 'root-group',
+        paneIds: ['a'],
+        activePaneId: 'a'
+      },
+      panesById: {
+        a: { id: 'a', title: 'A', componentKey: 'a' }
+      }
+    };
+
+    const next = reduceClosePane(layout, 'root-group', 'a');
+
+    const root = asTabGroup(next.root);
+    expect(root.paneIds).toEqual([]);
+    expect(root.activePaneId).toBe('');
+  });
+
+  // OPTIONAL (only keep if you implement the duplicate-move guard):
+  it('does not duplicate paneId when moving into a group that already contains it (defensive)', () => {
+    const layout: DockLayout = {
+      root: {
+        type: 'split',
+        id: 'root',
+        direction: 'horizontal',
+        sizes: [50, 50],
+        children: [
+          { type: 'tab-group', id: 'left', paneIds: ['a'], activePaneId: 'a' },
+          { type: 'tab-group', id: 'right', paneIds: ['b', 'a'], activePaneId: 'b' }
+        ]
+      },
+      panesById: {
+        a: { id: 'a', title: 'A', componentKey: 'a' },
+        b: { id: 'b', title: 'B', componentKey: 'b' }
+      }
+    };
+
+    const next = reduceMovePaneBetweenGroups(layout, 'a', 'left', 'right', 1);
+
+    // preferred behavior: no change because it would duplicate
+    expect(next).toBe(layout);
   });
 });
