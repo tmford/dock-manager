@@ -1,6 +1,6 @@
-import { DragDropModule, CdkDragDrop } from '@angular/cdk/drag-drop';
+import { DragDropModule, CdkDragDrop, CdkDragEnter, CdkDragExit } from '@angular/cdk/drag-drop';
 import { NgTemplateOutlet } from '@angular/common';
-import { ChangeDetectionStrategy, Component, Input, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, Input, inject, signal } from '@angular/core';
 import { LayoutNode } from '../model/layout-node';
 import { SplitNode } from '../model/split-node';
 import { TabGroupNode } from '../model/tab-group-node';
@@ -45,29 +45,34 @@ import { DockPaneHostComponent } from './dock-pane-host.component';
               [id]="group.id"
               [cdkDropListData]="group.paneIds"
               cdkDropListOrientation="horizontal"
-              (cdkDropListDropped)="onTabDropped(group.id, $event)"
+              (cdkDropListEntered)="onDropListEntered($event)"
+              (cdkDropListExited)="onDropListExited($event)"
+              (cdkDropListDropped)="drop($event)"
+              [class.drop-hover]="hoveredDropListId() === group.id"
             >
               @for (paneId of group.paneIds; track paneId) {
                 @let pane = panes[paneId];
                 <div
                   class="tab"
                   cdkDrag
-                  cdkDragLockAxis="x"
+                  [cdkDragData]="paneId"
+                  (cdkDragEnded)="clearHover()"
                   [class.active]="paneId === group.activePaneId"
                 >
                   <button
                     type="button"
                     class="tab-activate"
+                    cdkDragHandle
                     [attr.aria-label]="'Activate ' + (pane?.title || paneId)"
                     (click)="activate(group.id, paneId)"
                   >
                     <span class="tab-title">{{ pane?.title || paneId }}</span>
                   </button>
-
                   <button
                     type="button"
                     class="close-tab"
                     aria-label="Close tab"
+                    (pointerdown)="blockDrag($event)"
                     (click)="close(group.id, paneId, $event)"
                   >
                     ×
@@ -75,7 +80,16 @@ import { DockPaneHostComponent } from './dock-pane-host.component';
                 </div>
               }
             </div>
-            <div class="tab-body">
+            <div class="tab-body"
+              cdkDropList
+              [id]="paneDropId(group.id)"
+              cdkDropListOrientation="horizontal"
+              [cdkDropListSortingDisabled]="true"
+              (cdkDropListEntered)="onDropListEntered($event)"
+              (cdkDropListExited)="onDropListExited($event)"
+              (cdkDropListDropped)="drop($event)"
+              [class.drop-hover]="hoveredDropListId() === paneDropId(group.id)"
+            >
               @if (activePane) {
                 <dock-pane-host [pane]="activePane"></dock-pane-host>
               } @else {
@@ -205,6 +219,15 @@ import { DockPaneHostComponent } from './dock-pane-host.component';
         color: #94a3b8;
         font-size: 0.85rem;
       }
+      
+      .tab-strip.drop-hover {
+        outline: 2px solid #38bdf8;
+        outline-offset: 2px;
+      }
+
+      .tab-body.drop-hover {
+        box-shadow: inset 0 0 0 2px #38bdf8;
+      }
     `
   ],
   changeDetection: ChangeDetectionStrategy.OnPush
@@ -213,6 +236,9 @@ export class DockRendererComponent {
   @Input({ required: true }) node!: LayoutNode;
   @Input({ required: true }) store!: DockStore;
   private readonly commands = inject(DockCommands);
+  private static readonly PANE_DROP_SUFFIX = '__pane_drop__';
+  //private hoveredDropListId: string | null = null;
+  readonly hoveredDropListId = signal<string | null>(null);
 
   splitNode(node: LayoutNode): SplitNode {
     if (node.type !== 'split') {
@@ -248,19 +274,98 @@ export class DockRendererComponent {
     this.commands.closePane(groupId, paneId);
   }
 
-  onTabDropped(groupId: string, event: CdkDragDrop<string[]>): void {
-    if (event.previousContainer === event.container) {
-      this.commands.reorderPaneWithinGroup(groupId, event.previousIndex, event.currentIndex);
-      return;
-    }
-
-    const fromGroupId = event.previousContainer.id;
-    const toGroupId = event.container.id;
-    const paneId = event.previousContainer.data[event.previousIndex];
-    if (!paneId) {
-      return;
-    }
-
-    this.commands.movePaneBetweenGroups(paneId, fromGroupId, toGroupId, event.currentIndex);
+  blockDrag(event: PointerEvent): void {
+    event.preventDefault();
+    event.stopPropagation();
   }
+
+  paneDropId(groupId: string): string {
+    return `${groupId}${DockRendererComponent.PANE_DROP_SUFFIX}`;
+  }
+
+  private normalizeGroupId(dropListId: string): { groupId: string; isPaneDrop: boolean } {
+    const suffix = DockRendererComponent.PANE_DROP_SUFFIX;
+    if (dropListId.endsWith(suffix)) {
+      return { groupId: dropListId.slice(0, -suffix.length), isPaneDrop: true };
+    }
+    return { groupId: dropListId, isPaneDrop: false };
+  }
+  private findGroupPaneCount(groupId: string): number | null {
+
+    const root = this.store.layout().root;
+
+    const visit = (node: LayoutNode): number | null => {
+      if (node.type === 'tab-group') {
+        return node.id === groupId ? node.paneIds.length : null;
+      }
+      for (const child of (node as SplitNode).children) {
+        const hit = visit(child);
+        if (hit !== null) return hit;
+      }
+      return null;
+    };
+  
+    return visit(root);
+  }
+
+  drop(event: CdkDragDrop<string[]>): void {
+
+    this.hoveredDropListId.set(null);
+
+    const rawToId = event.container?.id;
+    const rawFromId = event.previousContainer?.id;
+    const paneId = event.item?.data as string | undefined;
+
+    if (!rawToId || !rawFromId || !paneId) {
+      return;
+    }
+
+    const to = this.normalizeGroupId(rawToId);
+    const from = this.normalizeGroupId(rawFromId);
+
+    // Same logical group:
+    if (from.groupId === to.groupId) {
+      // strip -> strip reorder
+      if (event.previousContainer === event.container) {
+        this.commands.reorderPaneWithinGroup(to.groupId, event.previousIndex, event.currentIndex);
+        return;
+      }
+
+      // strip -> pane-body drop (same group): move to end (optional nice UX)
+      const count = this.findGroupPaneCount(to.groupId);
+      if (count === null || count <= 1) {
+        return;
+      }
+
+      this.commands.reorderPaneWithinGroup(to.groupId, event.previousIndex, count - 1);
+      return;
+    }
+
+    // Cross-group move:
+    // If dropping onto pane area, insert at END. Otherwise use computed index.
+    //const toIndex = to.isPaneDrop ? Number.MAX_SAFE_INTEGER : event.currentIndex;
+    const toIndex = to.isPaneDrop
+      ? this.findGroupPaneCount(to.groupId) ?? 0
+      : event.currentIndex;
+
+    this.commands.movePaneBetweenGroups(paneId, from.groupId, to.groupId, toIndex);
+  }
+
+  onDropListEntered(event: CdkDragEnter<string[]>): void {
+    this.hoveredDropListId.set(event.container?.id ?? null);
+  }
+
+  onDropListExited(event: CdkDragExit<string[]>): void {
+    const id = event.container?.id ?? null;
+    if (this.hoveredDropListId() === id) {
+      this.hoveredDropListId.set(null);
+    }
+  }
+  isHovering(id: string): boolean {
+    return this.hoveredDropListId() === id;
+  }
+  clearHover(): void {
+    this.hoveredDropListId.set(null);
+  }
+
 }
