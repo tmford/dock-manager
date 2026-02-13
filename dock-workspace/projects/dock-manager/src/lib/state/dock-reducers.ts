@@ -6,6 +6,8 @@ declare const ngDevMode: boolean;
 
 export const DOCK_ROOT_SENTINEL_ID = '__dock_root__';
 //const DOCK_EMPTY_SENTINEL_ID = '__dock_empty__';
+const MIN_SPLIT_PERCENT = 5;
+const EPSILON = 0.0001;
 interface UpdateResult {
   node: LayoutNode;
   changed: boolean;
@@ -123,6 +125,22 @@ export function reduceMovePaneBetweenGroups(
   };
 }
 
+export function reduceResizeSplit(
+  layout: DockLayout,
+  splitId: string,
+  sizes: number[]
+): DockLayout {
+  const result = resizeSplit(layout.root, splitId, sizes);
+  if (!result.changed) {
+    return layout;
+  }
+
+  return {
+    ...layout,
+    root: result.node
+  };
+}
+
 function updateActivePane(node: LayoutNode, groupId: string, paneId: string): UpdateResult {
   if (node.type === 'tab-group') {
     if (node.id !== groupId) {
@@ -162,6 +180,52 @@ function updateActivePane(node: LayoutNode, groupId: string, paneId: string): Up
     },
     changed: true
   };
+}
+
+function resizeSplit(node: LayoutNode, splitId: string, sizes: number[]): UpdateResult {
+  if (node.type === 'split') {
+    if (node.id === splitId) {
+      const nextSizes = normalizeSplitSizes(node.children.length, sizes);
+      if (!nextSizes) {
+        return { node, changed: false };
+      }
+
+      if (areSizesEqual(node.sizes, nextSizes)) {
+        return { node, changed: false };
+      }
+
+      return {
+        node: {
+          ...node,
+          sizes: nextSizes
+        },
+        changed: true
+      };
+    }
+
+    let changed = false;
+    const nextChildren = node.children.map((child) => {
+      const result = resizeSplit(child, splitId, sizes);
+      if (result.changed) {
+        changed = true;
+      }
+      return result.node;
+    });
+
+    if (!changed) {
+      return { node, changed: false };
+    }
+
+    return {
+      node: {
+        ...node,
+        children: nextChildren
+      },
+      changed: true
+    };
+  }
+
+  return { node, changed: false };
 }
 
 function closePane(node: LayoutNode, groupId: string, paneId: string): UpdateResult {
@@ -218,6 +282,113 @@ function closePane(node: LayoutNode, groupId: string, paneId: string): UpdateRes
     },
     changed: true
   };
+}
+
+// FIX THIS FUNCTION 
+function normalizeSplitSizes(childrenCount: number, sizes: number[]): number[] | null {
+  if (sizes.length !== childrenCount) {
+    return null;
+  }
+
+  if (!sizes.every((size) => Number.isFinite(size) && size > 0)) {
+    return null;
+  }
+
+  const total = sizes.reduce((sum, size) => sum + size, 0);
+  if (!Number.isFinite(total) || total <= 0) {
+    return null;
+  }
+
+  const normalized = sizes.map((size) => (size / total) * 100);
+  const enforced = enforceMinSplitSizes(normalized);
+  if (!enforced) {
+    return null;
+  }
+
+  const sum = enforced.reduce((sumSizes, size) => sumSizes + size, 0);
+  const delta = 100 - sum;
+  const lastIndex = enforced.length - 1;
+  enforced[lastIndex] = enforced[lastIndex] + delta;
+
+  // Guard rail: ensure final element did not drift below minimum
+  if (
+    !Number.isFinite(enforced[lastIndex]) ||
+    enforced[lastIndex] < MIN_SPLIT_PERCENT - EPSILON
+  ) {
+      return null;
+  }
+
+  return enforced;
+}
+
+function enforceMinSplitSizes(sizes: number[]): number[] | null {
+  const result = sizes.slice();
+  const fixed = new Set<number>();
+
+  for (let i = 0; i < result.length; i++) {
+    if (result[i] < MIN_SPLIT_PERCENT) {
+      result[i] = MIN_SPLIT_PERCENT;
+      fixed.add(i);
+    }
+  }
+
+  while (true) {
+    const remaining = 100 - fixed.size * MIN_SPLIT_PERCENT;
+    if (remaining < -EPSILON) {
+      return null;
+    }
+
+    const adjustable: number[] = [];
+    for (let i = 0; i < result.length; i++) {
+      if (!fixed.has(i)) {
+        adjustable.push(i);
+      }
+    }
+
+    if (adjustable.length === 0) {
+      if (Math.abs(remaining) > EPSILON) {
+        return null;
+      }
+      return result;
+    }
+
+    const adjustableTotal = adjustable.reduce((sum, index) => sum + result[index], 0);
+    if (!Number.isFinite(adjustableTotal) || adjustableTotal <= 0) {
+      return null;
+    }
+
+    const scale = remaining / adjustableTotal;
+    let changed = false;
+    for (const index of adjustable) {
+      result[index] = result[index] * scale;
+    }
+
+    for (const index of adjustable) {
+      if (result[index] < MIN_SPLIT_PERCENT - EPSILON) {
+        result[index] = MIN_SPLIT_PERCENT;
+        fixed.add(index);
+        changed = true;
+      }
+    }
+
+    if (!changed) {
+      return result;
+    }
+  }
+}
+
+function areSizesEqual(existing: number[] | undefined, next: number[]): boolean {
+  if (!existing || existing.length !== next.length) {
+    return false;
+  }
+
+  for (let i = 0; i < next.length; i++) {
+    if (Math.abs(existing[i] - next[i]) >= EPSILON) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function reorderPaneWithinGroup(

@@ -1,6 +1,6 @@
 import { DragDropModule, CdkDragDrop, CdkDragEnter, CdkDragExit } from '@angular/cdk/drag-drop';
 import { NgTemplateOutlet } from '@angular/common';
-import { ChangeDetectionStrategy, Component, Input, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, Input, inject, signal } from '@angular/core';
 import { LayoutNode } from '../model/layout-node';
 import { SplitNode } from '../model/split-node';
 import { TabGroupNode } from '../model/tab-group-node';
@@ -29,6 +29,14 @@ import { DockPaneHostComponent } from './dock-pane-host.component';
                   [ngTemplateOutletContext]="{ $implicit: child }"
                 ></ng-container>
               </div>
+              @if (index < split.children.length - 1) {
+                <div
+                  class="split-gutter"
+                  [class.horizontal]="split.direction === 'horizontal'"
+                  [class.vertical]="split.direction === 'vertical'"
+                  (pointerdown)="startResize($event, split.id, split.direction, index)"
+                ></div>
+              }
             }
           </div>
         }
@@ -137,6 +145,25 @@ import { DockPaneHostComponent } from './dock-pane-host.component';
         background: #0f172a;
       }
 
+      .split-gutter {
+        flex: 0 0 6px;
+        background: #0b1220;
+        transition: background 120ms ease;
+        touch-action: none;
+      }
+
+      .split-gutter.horizontal {
+        cursor: col-resize;
+      }
+
+      .split-gutter.vertical {
+        cursor: row-resize;
+      }
+
+      .split-gutter:hover {
+        background: #1f2937;
+      }
+
       .dock-tabs {
         display: flex;
         flex-direction: column;
@@ -236,10 +263,27 @@ export class DockRendererComponent {
   @Input({ required: true }) node!: LayoutNode;
   @Input({ required: true }) store!: DockStore;
   private readonly commands = inject(DockCommands);
+  private readonly destroyRef = inject(DestroyRef);
   private static readonly PANE_DROP_SUFFIX = '__pane_drop__';
   //private hoveredDropListId: string | null = null;
   readonly hoveredDropListId = signal<string | null>(null);
+  readonly activeResize = signal<null | {
+    splitId: string;
+    direction: 'horizontal' | 'vertical';
+    index: number;
+    startClient: number;
+    startSizes: number[];
+    containerPx: number;
+    gutterEl: HTMLElement;
+  }>(null);
 
+  private readonly onWindowMove = (event: PointerEvent) => this.onResizeMove(event);
+  private readonly onWindowUp = () => this.endResize();
+  private readonly onLostPointerCapture = (_event: PointerEvent) => this.endResize();
+
+  constructor() {
+    this.destroyRef.onDestroy(() => this.endResize());
+  }
   splitNode(node: LayoutNode): SplitNode {
     if (node.type !== 'split') {
       throw new Error(`dock-renderer received node.type=${node.type}`);
@@ -263,6 +307,114 @@ export class DockRendererComponent {
     }
 
     return '1 1 0';
+  }
+
+  startResize(
+    event: PointerEvent,
+    splitId: string,
+    direction: 'horizontal' | 'vertical',
+    index: number
+  ): void {
+    event.preventDefault();
+    event.stopPropagation();
+
+    // If a resize is already active, fully clean it up first.
+    this.endResize();
+
+    const gutter = event.currentTarget as HTMLElement | null;
+    if (!gutter) return;
+
+    try {
+      gutter.setPointerCapture?.(event.pointerId);
+    } catch {
+      // Some browsers can throw if capture fails — ignore safely.
+    }
+
+    const container = gutter.parentElement;
+    if (!container) return;
+
+    const rect = container.getBoundingClientRect();
+    const containerPx = direction === 'horizontal' ? rect.width : rect.height;
+    if (!Number.isFinite(containerPx) || containerPx <= 0) return;
+
+    const split = this.findSplit(this.store.layout().root, splitId);
+    if (!split) return;
+
+    const startSizes = this.getSplitSizes(split);
+    if (index < 0 || index >= startSizes.length - 1) return;
+
+    this.activeResize.set({
+      splitId,
+      direction,
+      index,
+      startClient: direction === 'horizontal' ? event.clientX : event.clientY,
+      startSizes: startSizes.slice(),
+      containerPx,
+      gutterEl: gutter
+    });
+
+    gutter.addEventListener('lostpointercapture', this.onLostPointerCapture);
+
+    window.addEventListener('pointermove', this.onWindowMove);
+    window.addEventListener('pointerup', this.onWindowUp);
+    window.addEventListener('pointercancel', this.onWindowUp);
+  }
+
+  onResizeMove(event: PointerEvent): void {
+    const active = this.activeResize();
+    if (!active) {
+      return;
+    }
+
+    if (!Number.isFinite(active.containerPx) || active.containerPx <= 0) return;
+
+    const currentClient =
+      active.direction === 'horizontal' ? event.clientX : event.clientY;
+    const deltaPx = currentClient - active.startClient;
+    const deltaPct = (deltaPx / active.containerPx) * 100;
+    if (!Number.isFinite(deltaPct)) {
+      return;
+    }
+
+    const minPercent = 10;
+    const index = active.index;
+    const pairTotal = active.startSizes[index] + active.startSizes[index + 1];
+    if (pairTotal < minPercent * 2) {
+      return;
+    }
+
+    let left = active.startSizes[index] + deltaPct;
+    let right = active.startSizes[index + 1] - deltaPct;
+
+    if (left < minPercent) {
+      left = minPercent;
+      right = pairTotal - left;
+    } else if (right < minPercent) {
+      right = minPercent;
+      left = pairTotal - right;
+    }
+
+    left = Math.max(minPercent, left);
+    right = Math.max(minPercent, right);
+
+    const nextSizes = active.startSizes.slice();
+    nextSizes[index] = left;
+    nextSizes[index + 1] = right;
+
+    this.commands.resizeSplit(active.splitId, nextSizes);
+  }
+
+  endResize(): void {
+    const active = this.activeResize();
+    if (!active) return;
+
+    active.gutterEl.removeEventListener('lostpointercapture', this.onLostPointerCapture);
+
+    window.removeEventListener('pointermove', this.onWindowMove);
+    window.removeEventListener('pointerup', this.onWindowUp);
+    window.removeEventListener('pointercancel', this.onWindowUp);
+
+    this.activeResize.set(null);
   }
 
   activate(groupId: string, paneId: string): void {
@@ -368,4 +520,33 @@ export class DockRendererComponent {
     this.hoveredDropListId.set(null);
   }
 
+  private getSplitSizes(split: SplitNode): number[] {
+    const count = split.children.length;
+    const sizes = split.sizes ?? [];
+    if (sizes.length === count && sizes.every((size) => Number.isFinite(size) && size > 0)) {
+      const total = sizes.reduce((sum, size) => sum + size, 0);
+      if (Number.isFinite(total) && total > 0) {
+        return sizes.map((size) => (size / total) * 100);
+      }
+    }
+
+    return Array.from({ length: count }, () => 100 / count);
+  }
+
+  private findSplit(node: LayoutNode, splitId: string): SplitNode | null {
+    if (node.type === 'split') {
+      if (node.id === splitId) {
+        return node;
+      }
+
+      for (const child of node.children) {
+        const result = this.findSplit(child, splitId);
+        if (result) {
+          return result;
+        }
+      }
+    }
+
+    return null;
+  }
 }

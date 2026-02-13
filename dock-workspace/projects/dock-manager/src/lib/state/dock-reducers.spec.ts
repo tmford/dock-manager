@@ -5,6 +5,7 @@ import { TabGroupNode } from '../model/tab-group-node';
 import {
   reduceClosePane,
   reduceMovePaneBetweenGroups,
+  reduceResizeSplit,
   reduceReorderPaneWithinGroup,
   reduceSetActivePane
 } from './dock-reducers';
@@ -715,5 +716,182 @@ describe('dock reducers', () => {
 
     // preferred behavior: no change because it would duplicate
     expect(next).toBe(layout);
+  });
+
+  // ---------------------------------------------------------------------------
+  // resize split
+  // ---------------------------------------------------------------------------
+  it('updates sizes for a split by id', () => {
+    const next = reduceResizeSplit(baseLayout, 'root', [70, 30]);
+
+    expect(next).not.toBe(baseLayout);
+    const root = asSplit(next.root);
+    const baseRoot = asSplit(baseLayout.root);
+    expect(root.sizes).toEqual([70, 30]);
+    expect(root.children).toBe(baseRoot.children);
+  });
+
+  it('updates sizes for a nested split', () => {
+    const layout: DockLayout = {
+      root: {
+        type: 'split',
+        id: 'root',
+        direction: 'horizontal',
+        sizes: [60, 40],
+        children: [
+          {
+            type: 'split',
+            id: 'inner',
+            direction: 'vertical',
+            sizes: [50, 50],
+            children: [
+              {
+                type: 'tab-group',
+                id: 'top',
+                paneIds: ['a'],
+                activePaneId: 'a'
+              },
+              {
+                type: 'tab-group',
+                id: 'bottom',
+                paneIds: ['b'],
+                activePaneId: 'b'
+              }
+            ]
+          },
+          {
+            type: 'tab-group',
+            id: 'right',
+            paneIds: ['c'],
+            activePaneId: 'c'
+          }
+        ]
+      },
+      panesById: {
+        a: { id: 'a', title: 'A', componentKey: 'a' },
+        b: { id: 'b', title: 'B', componentKey: 'b' },
+        c: { id: 'c', title: 'C', componentKey: 'c' }
+      }
+    };
+
+    const next = reduceResizeSplit(layout, 'inner', [20, 80]);
+
+    const root = asSplit(next.root);
+    const inner = asSplit(root.children[0]);
+    expect(inner.sizes).toEqual([20, 80]);
+  });
+
+  it('no-ops when splitId is not found', () => {
+    const next = reduceResizeSplit(baseLayout, 'missing', [60, 40]);
+    expect(next).toBe(baseLayout);
+  });
+
+  it('rejects invalid sizes', () => {
+    const wrongLength = reduceResizeSplit(baseLayout, 'root', [100]);
+    expect(wrongLength).toBe(baseLayout);
+
+    const withNaN = reduceResizeSplit(baseLayout, 'root', [Number.NaN, 50]);
+    expect(withNaN).toBe(baseLayout);
+
+    const withInfinity = reduceResizeSplit(baseLayout, 'root', [Infinity, 50]);
+    expect(withInfinity).toBe(baseLayout);
+
+    const withZero = reduceResizeSplit(baseLayout, 'root', [0, 50]);
+    expect(withZero).toBe(baseLayout);
+  });
+
+  it('normalizes sizes to sum exactly 100', () => {
+    const next = reduceResizeSplit(baseLayout, 'root', [1, 1]);
+
+    const root = asSplit(next.root);
+    expectSizesSumTo100(root.sizes, 0.0001);
+    expect(root.sizes[0]).toBeCloseTo(50, 5);
+    expect(root.sizes[1]).toBeCloseTo(50, 5);
+  });
+
+  it('enforces minimum size of 5 percent', () => {
+    const next = reduceResizeSplit(baseLayout, 'root', [1, 99]);
+
+    const root = asSplit(next.root);
+    expect(root.sizes[0]).toBeCloseTo(5, 5);
+    expect(root.sizes[1]).toBeCloseTo(95, 5);
+  });
+
+  it('rejects impossible minimum redistribution', () => {
+    const manyChildren = Array.from({ length: 21 }, (_, index) => ({
+      type: 'tab-group' as const,
+      id: `group-${index}`,
+      paneIds: [`pane-${index}`],
+      activePaneId: `pane-${index}`
+    }));
+
+    const layout: DockLayout = {
+      root: {
+        type: 'split',
+        id: 'root',
+        direction: 'horizontal',
+        sizes: Array.from({ length: 21 }, () => 1),
+        children: manyChildren
+      },
+      panesById: manyChildren.reduce<Record<string, { id: string; title: string; componentKey: string }>>(
+        (acc, group, index) => {
+          const paneId = `pane-${index}`;
+          acc[paneId] = { id: paneId, title: paneId, componentKey: paneId };
+          return acc;
+        },
+        {}
+      )
+    };
+
+    const next = reduceResizeSplit(layout, 'root', Array.from({ length: 21 }, () => 1));
+    expect(next).toBe(layout);
+  });
+
+  it('does not alter tree structure when resizing', () => {
+    const next = reduceResizeSplit(baseLayout, 'root', [65, 35]);
+
+    const root = asSplit(next.root);
+    const baseRoot = asSplit(baseLayout.root);
+    expect(root.children).toBe(baseRoot.children);
+  });
+
+  it('is idempotent when sizes are effectively unchanged', () => {
+    const baseRoot = asSplit(baseLayout.root);
+    const next = reduceResizeSplit(baseLayout, 'root', [...baseRoot.sizes]);
+    expect(next).toBe(baseLayout);
+  });
+
+  it('updates even when existing sizes are malformed', () => {
+    const layout: DockLayout = {
+      root: {
+        type: 'split',
+        id: 'root',
+        direction: 'horizontal',
+        sizes: [100],
+        children: [
+          {
+            type: 'tab-group',
+            id: 'left',
+            paneIds: ['a'],
+            activePaneId: 'a'
+          },
+          {
+            type: 'tab-group',
+            id: 'right',
+            paneIds: ['b'],
+            activePaneId: 'b'
+          }
+        ]
+      },
+      panesById: {
+        a: { id: 'a', title: 'A', componentKey: 'a' },
+        b: { id: 'b', title: 'B', componentKey: 'b' }
+      }
+    };
+
+    const next = reduceResizeSplit(layout, 'root', [40, 60]);
+
+    const root = asSplit(next.root);
+    expect(root.sizes).toEqual([40, 60]);
   });
 });

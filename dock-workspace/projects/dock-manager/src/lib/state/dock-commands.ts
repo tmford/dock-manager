@@ -3,6 +3,7 @@ import { DockStore } from './dock-store';
 import {
   reduceClosePane,
   reduceMovePaneBetweenGroups,
+  reduceResizeSplit,
   reduceReorderPaneWithinGroup,
   reduceSetActivePane
 } from './dock-reducers';
@@ -55,6 +56,16 @@ export class DockCommands {
       toGroupId,
       toIndex
     );
+    if (nextLayout === layout) {
+      return;
+    }
+
+    this.store.setLayout(nextLayout);
+  }
+
+  resizeSplit(splitId: string, sizes: number[]): void {
+    const layout = this.store.layout();
+    const nextLayout = reduceResizeSplit(layout, splitId, sizes);
     if (nextLayout === layout) {
       return;
     }
