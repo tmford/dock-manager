@@ -141,6 +141,10 @@ export function reduceResizeSplit(
   };
 }
 
+export function findGroupIdForPane(layout: DockLayout, paneId: string): string | null {
+  return findGroupIdByPane(layout.root, paneId);
+}
+
 function updateActivePane(node: LayoutNode, groupId: string, paneId: string): UpdateResult {
   if (node.type === 'tab-group') {
     if (node.id !== groupId) {
@@ -465,6 +469,21 @@ function findTabGroup(node: LayoutNode, groupId: string): TabGroupNode | null {
 
   for (const child of node.children) {
     const result = findTabGroup(child, groupId);
+    if (result) {
+      return result;
+    }
+  }
+
+  return null;
+}
+
+function findGroupIdByPane(node: LayoutNode, paneId: string): string | null {
+  if (node.type === 'tab-group') {
+    return node.paneIds.includes(paneId) ? node.id : null;
+  }
+
+  for (const child of node.children) {
+    const result = findGroupIdByPane(child, paneId);
     if (result) {
       return result;
     }

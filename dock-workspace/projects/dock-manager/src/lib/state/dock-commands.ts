@@ -2,6 +2,7 @@ import { Injectable } from '@angular/core';
 import { DockStore } from './dock-store';
 import {
   reduceClosePane,
+  findGroupIdForPane,
   reduceMovePaneBetweenGroups,
   reduceResizeSplit,
   reduceReorderPaneWithinGroup,
@@ -71,5 +72,62 @@ export class DockCommands {
     }
 
     this.store.setLayout(nextLayout);
+  }
+
+  maximizePane(paneId: string): void {
+    const layout = this.store.layout();
+    if (!layout.panesById[paneId]) {
+      return;
+    }
+
+    if (this.store.maximizedPaneId() === paneId) {
+      return;
+    }
+
+    if (!this.store.maximizedPaneId()) {
+      this.store.setPreMaxLayout(structuredClone(layout));
+    }
+
+    this.store.setMaximizedPaneId(paneId);
+  }
+
+  exitMaximizeRestore(): void {
+    if (!this.store.maximizedPaneId()) {
+      return;
+    }
+
+    const snapshot = this.store.preMaxLayout();
+    if (snapshot) {
+      this.store.setLayout(snapshot);
+    }
+
+    this.store.setMaximizedPaneId(null);
+    this.store.setPreMaxLayout(null);
+  }
+
+  exitMaximizeClose(): void {
+    const paneId = this.store.maximizedPaneId();
+    if (!paneId) {
+      return;
+    }
+
+    const snapshot = this.store.preMaxLayout();
+    if (!snapshot) {
+      this.store.setMaximizedPaneId(null);
+      return;
+    }
+
+    const groupId = findGroupIdForPane(snapshot, paneId);
+    if (!groupId) {
+      this.store.setLayout(snapshot);
+      this.store.setMaximizedPaneId(null);
+      this.store.setPreMaxLayout(null);
+      return;
+    }
+
+    const nextLayout = reduceClosePane(snapshot, groupId, paneId);
+    this.store.setLayout(nextLayout);
+    this.store.setMaximizedPaneId(null);
+    this.store.setPreMaxLayout(null);
   }
 }

@@ -3,12 +3,15 @@ import { LayoutNode } from '../model/layout-node';
 import { SplitNode } from '../model/split-node';
 import { TabGroupNode } from '../model/tab-group-node';
 import {
+  findGroupIdForPane,
   reduceClosePane,
   reduceMovePaneBetweenGroups,
   reduceResizeSplit,
   reduceReorderPaneWithinGroup,
   reduceSetActivePane
 } from './dock-reducers';
+import { DockCommands } from './dock-commands';
+import { DockStore } from './dock-store';
 
 describe('dock reducers', () => {
   const baseLayout: DockLayout = {
@@ -893,5 +896,120 @@ describe('dock reducers', () => {
 
     const root = asSplit(next.root);
     expect(root.sizes).toEqual([40, 60]);
+  });
+});
+
+describe('maximize pane commands', () => {
+  const layout: DockLayout = {
+    root: {
+      type: 'split',
+      id: 'root',
+      direction: 'horizontal',
+      sizes: [50, 50],
+      children: [
+        {
+          type: 'tab-group',
+          id: 'left',
+          paneIds: ['a', 'b'],
+          activePaneId: 'a'
+        },
+        {
+          type: 'tab-group',
+          id: 'right',
+          paneIds: ['c'],
+          activePaneId: 'c'
+        }
+      ]
+    },
+    panesById: {
+      a: { id: 'a', title: 'A', componentKey: 'a' },
+      b: { id: 'b', title: 'B', componentKey: 'b' },
+      c: { id: 'c', title: 'C', componentKey: 'c' }
+    }
+  };
+
+  function setup(): { store: DockStore; commands: DockCommands } {
+    const store = new DockStore();
+    store.setLayout(structuredClone(layout));
+    return { store, commands: new DockCommands(store) };
+  }
+
+  it('maximizePane captures snapshot and sets maximizedPaneId', () => {
+    const { store, commands } = setup();
+
+    commands.maximizePane('b');
+
+    expect(store.maximizedPaneId()).toBe('b');
+    expect(store.preMaxLayout()).not.toBeNull();
+
+    const snapshot = store.preMaxLayout()!;
+    expect(snapshot).not.toBe(store.layout());
+    expect(snapshot.root).not.toBe(store.layout().root);
+  });
+
+  it('exitMaximizeRestore restores snapshot and clears maximize state', () => {
+    const { store, commands } = setup();
+
+    commands.maximizePane('b');
+
+    const snapshot = store.preMaxLayout();
+    if (!snapshot) {
+      fail('expected preMaxLayout snapshot to be set after maximize');
+      return;
+    }
+
+    commands.exitMaximizeRestore();
+
+    expect(store.maximizedPaneId()).toBeNull();
+    expect(store.preMaxLayout()).toBeNull();
+    expect(store.layout()).toBe(snapshot); // reference equality is correct here
+  });
+
+  it('exitMaximizeClose closes from snapshot layout', () => {
+    const { store, commands } = setup();
+    const snapshot = structuredClone(layout);
+    const groupId = findGroupIdForPane(snapshot, 'b');
+    if (!groupId) {
+      fail('expected groupId for pane');
+      return;
+    }
+
+    const expected = reduceClosePane(snapshot, groupId, 'b');
+
+    commands.maximizePane('b');
+    commands.exitMaximizeClose();
+
+    expect(store.maximizedPaneId()).toBeNull();
+    expect(store.preMaxLayout()).toBeNull();
+    expect(store.layout()).toEqual(expected);
+  });
+
+  it('exitMaximizeRestore no-ops when not maximized', () => {
+    const { store, commands } = setup();
+    const before = store.layout();
+
+    commands.exitMaximizeRestore();
+
+    expect(store.layout()).toBe(before);
+  });
+
+  it('exitMaximizeClose no-ops when not maximized', () => {
+    const { store, commands } = setup();
+    const before = store.layout();
+
+    commands.exitMaximizeClose();
+
+    expect(store.layout()).toBe(before);
+  });
+
+  it('maximizePane no-ops for unknown pane', () => {
+    const { store, commands } = setup();
+    const before = store.layout();
+
+    commands.maximizePane('missing');
+
+    expect(store.maximizedPaneId()).toBeNull();
+    expect(store.preMaxLayout()).toBeNull();
+    expect(store.layout()).toBe(before);
   });
 });

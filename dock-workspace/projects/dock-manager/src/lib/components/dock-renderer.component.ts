@@ -13,106 +13,152 @@ import { DockPaneHostComponent } from './dock-pane-host.component';
   standalone: true,
   imports: [DockPaneHostComponent, DragDropModule, NgTemplateOutlet],
   template: `
-    <ng-template #rendererTpl let-node>
-      @switch (node.type) {
-        @case ('split') {
-          @let split = splitNode(node);
-          <div
-            class="dock-split"
-            [class.horizontal]="split.direction === 'horizontal'"
-            [class.vertical]="split.direction === 'vertical'"
-          >
-            @for (child of split.children; track child.id; let index = $index) {
-              <div class="split-child" [style.flex]="childFlex(split, index)">
-                <ng-container
-                  [ngTemplateOutlet]="rendererTpl"
-                  [ngTemplateOutletContext]="{ $implicit: child }"
-                ></ng-container>
-              </div>
-              @if (index < split.children.length - 1) {
-                <div
-                  class="split-gutter"
-                  [class.horizontal]="split.direction === 'horizontal'"
-                  [class.vertical]="split.direction === 'vertical'"
-                  (pointerdown)="startResize($event, split.id, split.direction, index)"
-                ></div>
-              }
-            }
+    @if (store.maximizedPaneId(); as maximizedId) {
+      @let layout = store.layout();
+      @let pane = layout.panesById[maximizedId];
+      <div class="maximized">
+        <div class="maximized-bar">
+          <div class="maximized-title">{{ pane?.title || maximizedId }}</div>
+          <div class="maximized-actions">
+            <button type="button" class="maximized-button" (click)="restoreMaximize()">
+              <span class="material-symbols-outlined">
+                close_fullscreen
+              </span> 
+            </button>
+            <button type="button" class="maximized-button danger" (click)="closeMaximize()">
+              <span class="material-symbols-outlined">
+                close
+              </span>
+            </button>
           </div>
-        }
-        @case ('tab-group') {
-          @let group = tabGroup(node);
-          @let layout = store.layout();
-          @let panes = layout.panesById;
-          @let activePane = panes[group.activePaneId];
-
-          <div class="dock-tabs">
+        </div>
+        <div class="maximized-body">
+          @if (pane) {
+            <dock-pane-host [pane]="pane"></dock-pane-host>
+          } @else {
+            <div class="empty">Pane not found</div>
+          }
+        </div>
+      </div>
+    } @else {
+      <ng-template #rendererTpl let-node>
+        @switch (node.type) {
+          @case ('split') {
+            @let split = splitNode(node);
             <div
-              class="tab-strip"
-              cdkDropList
-              [id]="group.id"
-              [cdkDropListData]="group.paneIds"
-              cdkDropListOrientation="horizontal"
-              (cdkDropListEntered)="onDropListEntered($event)"
-              (cdkDropListExited)="onDropListExited($event)"
-              (cdkDropListDropped)="drop($event)"
-              [class.drop-hover]="hoveredDropListId() === group.id"
+              class="dock-split"
+              [class.horizontal]="split.direction === 'horizontal'"
+              [class.vertical]="split.direction === 'vertical'"
             >
-              @for (paneId of group.paneIds; track paneId) {
-                @let pane = panes[paneId];
+              @for (child of split.children; track child.id; let index = $index) {
+                <div class="split-child" [style.flex]="childFlex(split, index)">
+                  <ng-container
+                    [ngTemplateOutlet]="rendererTpl"
+                    [ngTemplateOutletContext]="{ $implicit: child }"
+                  ></ng-container>
+                </div>
+                @if (index < split.children.length - 1) {
+                  <div
+                    class="split-gutter"
+                    [class.horizontal]="split.direction === 'horizontal'"
+                    [class.vertical]="split.direction === 'vertical'"
+                    (pointerdown)="startResize($event, split.id, split.direction, index)"
+                  ></div>
+                }
+              }
+            </div>
+          }
+          @case ('tab-group') {
+            @let group = tabGroup(node);
+            @let layout = store.layout();
+            @let panes = layout.panesById;
+            @let activePane = panes[group.activePaneId];
+
+            <div class="dock-tabs">
+              <div class="tab-bar">
                 <div
-                  class="tab"
-                  cdkDrag
-                  [cdkDragData]="paneId"
-                  (cdkDragEnded)="clearHover()"
-                  [class.active]="paneId === group.activePaneId"
+                  class="tab-strip"
+                  cdkDropList
+                  [id]="group.id"
+                  [cdkDropListData]="group.paneIds"
+                  cdkDropListOrientation="horizontal"
+                  (cdkDropListEntered)="onDropListEntered($event)"
+                  (cdkDropListExited)="onDropListExited($event)"
+                  (cdkDropListDropped)="drop($event)"
+                  [class.drop-hover]="hoveredDropListId() === group.id"
                 >
+                  @for (paneId of group.paneIds; track paneId) {
+                    @let pane = panes[paneId];
+                    <div
+                      class="tab"
+                      cdkDrag
+                      [cdkDragData]="paneId"
+                      (cdkDragEnded)="clearHover()"
+                      [class.active]="paneId === group.activePaneId"
+                    >
+                      <button
+                        type="button"
+                        class="tab-activate"
+                        cdkDragHandle
+                        [attr.aria-label]="'Activate ' + (pane?.title || paneId)"
+                        (click)="activate(group.id, paneId)"
+                      >
+                        <span class="tab-title">{{ pane?.title || paneId }}</span>
+                      </button>
+                      <button
+                        type="button"
+                        class="close-tab"
+                        aria-label="Close tab"
+                        (pointerdown)="blockDrag($event)"
+                        (click)="close(group.id, paneId, $event)"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  }
+                </div>
+                <div class="tab-actions">
                   <button
                     type="button"
-                    class="tab-activate"
-                    cdkDragHandle
-                    [attr.aria-label]="'Activate ' + (pane?.title || paneId)"
-                    (click)="activate(group.id, paneId)"
-                  >
-                    <span class="tab-title">{{ pane?.title || paneId }}</span>
-                  </button>
-                  <button
-                    type="button"
-                    class="close-tab"
-                    aria-label="Close tab"
+                    class="tab-action"
+                    aria-label="Maximize pane"
+                    title="Maximize"
                     (pointerdown)="blockDrag($event)"
-                    (click)="close(group.id, paneId, $event)"
+                    (click)="activePane && maximize(activePane.id)"
+                    [disabled]="!activePane"
                   >
-                    ×
+                    <span class="material-symbols-outlined">
+                      open_in_full
+                    </span>
                   </button>
                 </div>
-              }
+              </div>
+              <div class="tab-body"
+                cdkDropList
+                [id]="paneDropId(group.id)"
+                cdkDropListOrientation="horizontal"
+                [cdkDropListSortingDisabled]="true"
+                (cdkDropListEntered)="onDropListEntered($event)"
+                (cdkDropListExited)="onDropListExited($event)"
+                (cdkDropListDropped)="drop($event)"
+                [class.drop-hover]="hoveredDropListId() === paneDropId(group.id)"
+              >
+                @if (activePane) {
+                  <dock-pane-host [pane]="activePane"></dock-pane-host>
+                } @else {
+                  <div class="empty">No active pane</div>
+                }
+              </div>
             </div>
-            <div class="tab-body"
-              cdkDropList
-              [id]="paneDropId(group.id)"
-              cdkDropListOrientation="horizontal"
-              [cdkDropListSortingDisabled]="true"
-              (cdkDropListEntered)="onDropListEntered($event)"
-              (cdkDropListExited)="onDropListExited($event)"
-              (cdkDropListDropped)="drop($event)"
-              [class.drop-hover]="hoveredDropListId() === paneDropId(group.id)"
-            >
-              @if (activePane) {
-                <dock-pane-host [pane]="activePane"></dock-pane-host>
-              } @else {
-                <div class="empty">No active pane</div>
-              }
-            </div>
-          </div>
+          }
         }
-      }
-    </ng-template>
+      </ng-template>
 
-    <ng-container
-      [ngTemplateOutlet]="rendererTpl"
-      [ngTemplateOutletContext]="{ $implicit: node }"
-    ></ng-container>
+      <ng-container
+        [ngTemplateOutlet]="rendererTpl"
+        [ngTemplateOutletContext]="{ $implicit: node }"
+      ></ng-container>
+    }
   `,
   styles: [
     `
@@ -128,6 +174,7 @@ import { DockPaneHostComponent } from './dock-pane-host.component';
         height: 100%;
         gap: 1px;
         background: #1e293b;
+        overflow: hidden;
       }
 
       .dock-split.horizontal {
@@ -174,6 +221,9 @@ import { DockPaneHostComponent } from './dock-pane-host.component';
       }
 
       .tab-strip {
+        background: transparent;
+        border-bottom: 0;
+        flex: 1;
         display: flex;
         gap: 0.25rem;
         padding: 0.35rem 0.5rem;
@@ -246,6 +296,146 @@ import { DockPaneHostComponent } from './dock-pane-host.component';
         color: #94a3b8;
         font-size: 0.85rem;
       }
+
+      .material-symbols-outlined {
+        font-size: 12px;
+        opacity: 0.8;
+        transition: opacity 120ms ease;
+      }
+
+      .material-symbols-outlined:hover {
+        opacity: 1;
+      }
+
+      .maximized {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        height: 100%;
+        border: 1px solid #334155;
+        background: #0b1120;
+      }
+
+      .maximized-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.4rem 0.6rem;
+        border-bottom: 1px solid #1f2937;
+        background: #111827;
+        color: #e2e8f0;
+        gap: 0.75rem;
+      }
+
+      .maximized-title {
+        font-size: 0.85rem;
+        font-weight: 600;
+      }
+
+      .maximized-actions {
+        display: inline-flex;
+        gap: 0.5rem;
+      }
+
+      .maximized-button {
+        border: 1px solid #334155;
+        background: #0f172a;
+        color: #e2e8f0;
+        padding: 0.25rem 0.5rem;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 0.75rem;
+      }
+
+      .maximized-button.danger {
+        border-color: #c2410c;
+        color: #fed7aa;
+      }
+
+      .maximized-body {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+      }
+
+      .pane-surface {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+      }
+
+      .pane-maximize {
+        position: absolute;
+        top: 6px;
+        right: 6px;
+        z-index: 5;
+
+        border: 1px solid rgba(51, 65, 85, 0.7);
+        background: rgba(15, 23, 42, 0.55);
+        color: #e2e8f0;
+
+        border-radius: 8px;
+        padding: 0.2rem 0.35rem;
+        font-size: 0.8rem;
+        line-height: 1;
+
+        cursor: pointer;
+
+        opacity: 0;
+        transform: translateY(-2px);
+        transition: opacity 120ms ease, transform 120ms ease, background 120ms ease;
+      }
+
+      .pane-surface:hover .pane-maximize,
+      .pane-maximize:focus-visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      .pane-maximize:hover {
+        background: rgba(15, 23, 42, 0.85);
+        border-color: rgba(56, 189, 248, 0.7);
+      }
+
+      .pane-maximize:focus-visible {
+        outline: 2px solid #38bdf8;
+        outline-offset: 2px;
+      }
+
+      .tab-bar {
+        display: flex;
+        align-items: center;
+        border-bottom: 1px solid #1f2937;
+        background: hsla(221, 39%, 11%, 1.00);
+      }
+
+      .tab-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+        padding: 0.35rem 0.5rem;
+        flex: 0 0 auto;
+      }
+
+      .tab-action {
+        border: 1px solid #334155;
+        background: #0f172a;
+        color: #e2e8f0;
+        padding: 0.25rem 0.4rem;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 0.8rem;
+        line-height: 1;
+        opacity: 0.9;
+      }
+
+      .tab-action:hover { opacity: 1; }
+
+      .tab-action:disabled {
+        opacity: 0.35;
+        cursor: default;
+      }
       
       .tab-strip.drop-hover {
         outline: 2px solid #38bdf8;
@@ -303,10 +493,11 @@ export class DockRendererComponent {
   childFlex(split: SplitNode, index: number): string {
     const size = split.sizes?.[index];
     if (typeof size === 'number' && size > 0) {
-      return `0 0 ${size}%`;
+      // Treat sizes as weights so gutters/gaps don't push total over 100%
+      return `${size} 0 0`;
     }
 
-    return '1 1 0';
+    return '1 0 0';
   }
 
   startResize(
@@ -424,6 +615,18 @@ export class DockRendererComponent {
   close(groupId: string, paneId: string, event: Event): void {
     event.stopPropagation();
     this.commands.closePane(groupId, paneId);
+  }
+
+  maximize(paneId: string): void {
+    this.commands.maximizePane(paneId);
+  }
+
+  restoreMaximize(): void {
+    this.commands.exitMaximizeRestore();
+  }
+
+  closeMaximize(): void {
+    this.commands.exitMaximizeClose();
   }
 
   blockDrag(event: PointerEvent): void {
