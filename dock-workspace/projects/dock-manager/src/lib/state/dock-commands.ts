@@ -5,6 +5,7 @@ import {
   findGroupIdForPane,
   reduceMovePaneBetweenGroups,
   reduceResizeSplit,
+  reduceRestorePaneToGroup,
   reduceReorderPaneWithinGroup,
   reduceSetActivePane
 } from './dock-reducers';
@@ -26,6 +27,20 @@ export class DockCommands {
   closePane(groupId: string, paneId: string): void {
     const layout = this.store.layout();
     const nextLayout = reduceClosePane(layout, groupId, paneId);
+    if (nextLayout === layout) {
+      return;
+    }
+
+    this.store.setLayout(nextLayout);
+  }
+
+  restorePaneToGroup(
+    groupId: string,
+    paneId: string,
+    options?: { index?: number; activate?: boolean }
+  ): void {
+    const layout = this.store.layout();
+    const nextLayout = reduceRestorePaneToGroup(layout, groupId, paneId, options);
     if (nextLayout === layout) {
       return;
     }

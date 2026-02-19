@@ -52,6 +52,34 @@ export function reduceClosePane(
   };
 }
 
+export function reduceRestorePaneToGroup(
+  layout: DockLayout,
+  groupId: string,
+  paneId: string,
+  options?: { index?: number; activate?: boolean }
+): DockLayout {
+  if (!layout.panesById[paneId]) {
+    return layout;
+  }
+
+  if (findGroupIdForPane(layout, paneId)) {
+    return layout;
+  }
+
+  const result = restorePaneToGroup(layout.root, groupId, paneId, options);
+  if (!result.changed) {
+    return layout;
+  }
+
+  const normalizedRoot = normalizeRoot(result.node);
+  assertValidTabGroup(normalizedRoot);
+
+  return {
+    ...layout,
+    root: normalizedRoot
+  };
+}
+
 export function reduceReorderPaneWithinGroup(
   layout: DockLayout,
   groupId: string,
@@ -288,7 +316,63 @@ function closePane(node: LayoutNode, groupId: string, paneId: string): UpdateRes
   };
 }
 
-// FIX THIS FUNCTION 
+function restorePaneToGroup(
+  node: LayoutNode,
+  groupId: string,
+  paneId: string,
+  options?: { index?: number; activate?: boolean }
+): UpdateResult {
+  if (node.type === 'tab-group') {
+    if (node.id !== groupId) {
+      return { node, changed: false };
+    }
+
+    if (node.paneIds.includes(paneId)) {
+      return { node, changed: false };
+    }
+
+    const targetIndex =
+      typeof options?.index === 'number' && Number.isFinite(options.index)
+        ? Math.trunc(options.index)
+        : node.paneIds.length;
+    const nextPaneIds = insertPaneIntoGroup(node, paneId, targetIndex).paneIds;
+
+    return {
+      node: {
+        ...node,
+        paneIds: nextPaneIds,
+        activePaneId: options?.activate === false ? node.activePaneId : paneId
+      },
+      changed: true
+    };
+  }
+
+  if (node.type !== 'split') {
+    return { node, changed: false };
+  }
+
+  let changed = false;
+  const nextChildren = node.children.map((child) => {
+    const result = restorePaneToGroup(child, groupId, paneId, options);
+    if (result.changed) {
+      changed = true;
+    }
+    return result.node;
+  });
+
+  if (!changed) {
+    return { node, changed: false };
+  }
+
+  return {
+    node: {
+      ...node,
+      children: nextChildren
+    },
+    changed: true
+  };
+}
+
 function normalizeSplitSizes(childrenCount: number, sizes: number[]): number[] | null {
   if (sizes.length !== childrenCount) {
     return null;

@@ -1,5 +1,5 @@
-import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
-import { DockLayout, DockRootComponent, DockStore } from 'dock-manager';
+import { ChangeDetectionStrategy, Component, inject, signal, computed } from '@angular/core';
+import { DockLayout, DockRootComponent, DockStore, DockCommands, LayoutNode } from 'dock-manager';
 
 const initialLayout: DockLayout = {
   root: {
@@ -109,6 +109,25 @@ const initialLayout: DockLayout = {
   }
 };
 
+function collectOpenPaneIds(node: LayoutNode, out = new Set<string>()) {
+  if (node.type === 'tab-group') {
+    node.paneIds.forEach((id) => out.add(id));
+    return out;
+  }
+  node.children.forEach((child) => collectOpenPaneIds(child, out));
+  return out;
+}
+
+function firstTabGroupId(node: LayoutNode): string | null {
+  if (node.type === 'tab-group') return node.id;
+  if (node.type !== 'split') return null;
+  for (const child of node.children) {
+    const id = firstTabGroupId(child);
+    if (id) return id;
+  }
+  return null;
+}
+
 @Component({
   selector: 'app-root',
   standalone: true,
@@ -118,9 +137,38 @@ const initialLayout: DockLayout = {
   changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class App {
+
   readonly dockStore = inject(DockStore);
+  readonly layout = this.dockStore.layout;
+  readonly commands = inject(DockCommands);
+  readonly activeGroupId = signal<string | null>(null);
 
   constructor() {
     this.dockStore.setLayout(initialLayout);
   }
+
+  open = computed(() => collectOpenPaneIds(this.layout().root));
+  available = computed(() => {
+    const layout = this.layout();
+    const open = this.open();
+    return Object.keys(layout.panesById).filter((id) => !open.has(id));
+  });
+
+  onReopenSelect(event: Event) {
+    const select = event.currentTarget as HTMLSelectElement | null;
+    const paneId = select?.value ?? '';
+    if (!paneId) return;
+
+    const layout = this.layout();
+    const groupId = firstTabGroupId(layout.root);
+    if (!groupId) return;
+    
+    // choose your groupId strategy
+    this.commands.restorePaneToGroup(groupId, paneId, { activate: true });
+
+
+    // optional: reset dropdown back to placeholder
+    if (select) select.value = '';
+  }
+
 }

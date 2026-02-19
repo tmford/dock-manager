@@ -7,7 +7,7 @@ import { TabGroupNode } from '../model/tab-group-node';
 import { DockCommands } from '../state/dock-commands';
 import { DockStore } from '../state/dock-store';
 import { DockPaneHostComponent } from './dock-pane-host.component';
-
+import { DockUiContext } from './dock-ui-context';
 @Component({
   selector: 'dock-renderer',
   standalone: true,
@@ -105,16 +105,19 @@ import { DockPaneHostComponent } from './dock-pane-host.component';
                       >
                         <span class="tab-title">{{ pane?.title || paneId }}</span>
                       </button>
-                      <button
-                        type="button"
-                        class="close-tab"
-                        aria-label="Close tab"
-                        (pointerdown)="blockDrag($event)"
-                        (click)="close(group.id, paneId, $event)"
-                      >
-                        ×
-                      </button>
+                      @if (paneId === group.activePaneId) {
+                        <button
+                          type="button"
+                          class="close-tab"
+                          aria-label="Close tab"
+                          (pointerdown)="blockDrag($event)"
+                          (click)="close(group.id, paneId, $event)"
+                        >
+                          ×
+                        </button>
+                      }
                     </div>
+                    
                   }
                 </div>
                 <div class="tab-actions">
@@ -278,6 +281,7 @@ import { DockPaneHostComponent } from './dock-pane-host.component';
       }
 
       .close-tab:hover { opacity: 1; }
+
 
       .close-tab:focus-visible,
       .tab-activate:focus-visible {
@@ -470,6 +474,8 @@ export class DockRendererComponent {
   private readonly onWindowMove = (event: PointerEvent) => this.onResizeMove(event);
   private readonly onWindowUp = () => this.endResize();
   private readonly onLostPointerCapture = (_event: PointerEvent) => this.endResize();
+
+  private readonly uiContext = inject(DockUiContext);
 
   constructor() {
     this.destroyRef.onDestroy(() => this.endResize());

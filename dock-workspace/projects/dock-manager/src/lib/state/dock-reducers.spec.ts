@@ -7,6 +7,7 @@ import {
   reduceClosePane,
   reduceMovePaneBetweenGroups,
   reduceResizeSplit,
+  reduceRestorePaneToGroup,
   reduceReorderPaneWithinGroup,
   reduceSetActivePane
 } from './dock-reducers';
@@ -896,6 +897,153 @@ describe('dock reducers', () => {
 
     const root = asSplit(next.root);
     expect(root.sizes).toEqual([40, 60]);
+  });
+});
+
+describe('reduceRestorePaneToGroup', () => {
+  const baseLayout: DockLayout = {
+    root: {
+      type: 'split',
+      id: 'root',
+      direction: 'horizontal',
+      sizes: [50, 50],
+      children: [
+        {
+          type: 'tab-group',
+          id: 'left',
+          paneIds: ['a'],
+          activePaneId: 'a'
+        },
+        {
+          type: 'tab-group',
+          id: 'right',
+          paneIds: ['c'],
+          activePaneId: 'c'
+        }
+      ]
+    },
+    panesById: {
+      a: { id: 'a', title: 'A', componentKey: 'a' },
+      b: { id: 'b', title: 'B', componentKey: 'b' },
+      c: { id: 'c', title: 'C', componentKey: 'c' },
+      d: { id: 'd', title: 'D', componentKey: 'd' }
+    }
+  };
+
+  function getGroup(layout: DockLayout, groupId: string): TabGroupNode {
+    const visit = (node: LayoutNode): TabGroupNode | null => {
+      if (node.type === 'tab-group') {
+        return node.id === groupId ? node : null;
+      }
+      for (const child of node.children) {
+        const result = visit(child);
+        if (result) {
+          return result;
+        }
+      }
+      return null;
+    };
+
+    const group = visit(layout.root);
+    if (!group) {
+      fail(`expected group ${groupId}`);
+      throw new Error('unreachable');
+    }
+
+    return group;
+  }
+
+  it('restores by appending when no index provided', () => {
+    const next = reduceRestorePaneToGroup(baseLayout, 'left', 'b');
+
+    expect(next).not.toBe(baseLayout);
+    const left = getGroup(next, 'left');
+    expect(left.paneIds).toEqual(['a', 'b']);
+    expect(left.activePaneId).toBe('b');
+  });
+
+  it('restores by inserting at index 0', () => {
+    const next = reduceRestorePaneToGroup(baseLayout, 'left', 'b', { index: 0 });
+
+    const left = getGroup(next, 'left');
+    expect(left.paneIds).toEqual(['b', 'a']);
+    expect(left.activePaneId).toBe('b');
+  });
+
+  it('restores by inserting at a middle index', () => {
+    const splitRoot = baseLayout.root as SplitNode;
+    const layout: DockLayout = {
+      ...baseLayout,
+      root: {
+        ...splitRoot,
+        children: [
+          {
+            type: 'tab-group',
+            id: 'left',
+            paneIds: ['a', 'c', 'd'],
+            activePaneId: 'a'
+          },
+         splitRoot.children[1]
+        ]
+      }
+    };
+
+    const next = reduceRestorePaneToGroup(layout, 'left', 'b', { index: 1 });
+
+    const left = getGroup(next, 'left');
+    expect(left.paneIds).toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it('restores with index > length clamps to append', () => {
+    const next = reduceRestorePaneToGroup(baseLayout, 'left', 'b', { index: 999 });
+
+    const left = getGroup(next, 'left');
+    expect(left.paneIds).toEqual(['a', 'b']);
+  });
+
+  it('activates restored pane by default', () => {
+    const next = reduceRestorePaneToGroup(baseLayout, 'left', 'b');
+
+    const left = getGroup(next, 'left');
+    expect(left.activePaneId).toBe('b');
+  });
+
+  it('respects activate:false', () => {
+    const next = reduceRestorePaneToGroup(baseLayout, 'left', 'b', { activate: false });
+
+    const left = getGroup(next, 'left');
+    expect(left.paneIds).toEqual(['a', 'b']);
+    expect(left.activePaneId).toBe('a');
+  });
+
+  it('no-ops when paneId is not in panesById', () => {
+    const next = reduceRestorePaneToGroup(baseLayout, 'left', 'missing-pane');
+
+    expect(next).toBe(baseLayout);
+  });
+
+  it('no-ops when groupId is not found', () => {
+    const next = reduceRestorePaneToGroup(baseLayout, 'missing-group', 'b');
+
+    expect(next).toBe(baseLayout);
+  });
+
+  it('no-ops when paneId is already open anywhere', () => {
+    const next = reduceRestorePaneToGroup(baseLayout, 'left', 'c');
+
+    expect(next).toBe(baseLayout);
+  });
+
+  it('no-ops when paneId is already present in same group', () => {
+    const next = reduceRestorePaneToGroup(baseLayout, 'left', 'a');
+
+    expect(next).toBe(baseLayout);
+  });
+
+  it('ensures pane belongs to exactly target group after success', () => {
+    const next = reduceRestorePaneToGroup(baseLayout, 'left', 'b');
+
+    expect(findGroupIdForPane(next, 'b')).toBe('left');
   });
 });
 

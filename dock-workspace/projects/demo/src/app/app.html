@@ -1,1 +1,11 @@
+<label>
+  Reopen pane:
+  <select (change)="onReopenSelect($event)">
+    <option value="" selected disabled>Select…</option>
+
+    @for (id of available(); track id) {
+      <option [value]="id">{{ layout().panesById[id].title }}</option>
+    }
+  </select>
+</label>
 <dock-root class="app-shell" [store]="dockStore"></dock-root>
